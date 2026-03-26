@@ -110,16 +110,16 @@ function parseUserInfo(body) {
 // Freshdesk 유형 필드 값 — Admin > Ticket Fields > Type 에서 설정한 값과 일치해야 함
 function mapTicketType(type) {
   const map = {
-    '初期不良':   'Problem',
-    'サイズ交換': 'Question',
-    '返品・返金': 'Refund',
-    '再不良':     'Problem',
-    '接続エラー': 'Problem',
-    '測定エラー': 'Problem',
-    '追跡番号':   'Question',
-    'その他':     'Question',
+    '初期不良':   '기기장애',
+    'サイズ交換': '요청',
+    '返品・返金': '반품',
+    '再不良':     '기기장애',
+    '接続エラー': '기능장애',
+    '測定エラー': '기능장애',
+    '追跡番号':   '질문',
+    'その他':     '질문',
   };
-  return map[type] || 'Question';
+  return map[type] || '질문';
 }
 
 // 우선순위: 1=Low, 2=Medium, 3=High, 4=Urgent
