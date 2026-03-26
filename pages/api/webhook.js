@@ -28,13 +28,23 @@ export default async function handler(req, res) {
   console.log(`[webhook] ticket#${ticketId} "${subject}"`);
 
   try {
+    // 1. 히스토리 조회
     const conversations = await getConversations(ticketId);
     const hasHistory    = conversations.length > 0;
-    const type          = classifyEmail(subject, bodyText);
-    const customFields  = parseUserInfo(bodyText);
-    const priority      = detectPriority(subject, bodyText);
-    const ticketType    = mapTicketType(type);
 
+    // 2. 문의 유형 분류
+    const type = classifyEmail(subject, bodyText);
+
+    // 3. 커스텀 필드 파싱
+    const customFields = parseUserInfo(bodyText);
+
+    // 4. 우선순위 판단
+    const priority = detectPriority(subject, bodyText);
+
+    // 5. 티켓 유형 매핑 (Freshdesk 실제 옵션값)
+    const ticketType = mapTicketType(type);
+
+    // 6. GPT 초안 생성
     const userContent = hasHistory
       ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${
           conversations.map(c => {
@@ -55,17 +65,19 @@ export default async function handler(req, res) {
     });
 
     const draft = completion.choices[0]?.message?.content || '';
-    console.log(`[webhook] ticket#${ticketId} type=${type} priority=${priority}`);
+    console.log(`[webhook] ticket#${ticketId} done. type=${type} priority=${priority}`);
 
+    // 7. 태그 추가
     await addTag(ticketId, type);
 
+    // 8. 티켓 필드 업데이트
     await updateTicketFields(ticketId, {
       custom_fields: customFields,
       priority,
-      ...(ticketType ? { type: ticketType } : {}),
+      type: ticketType,
     });
 
-    // 노트: 초안만 (헤더 없음)
+    // 9. 프라이빗 노트 — 초안만 깔끔하게
     await addPrivateNote(ticketId, draft);
 
     res.status(200).json({ success: true, ticketId, type, priority });
@@ -76,13 +88,16 @@ export default async function handler(req, res) {
   }
 }
 
+// ── 커스텀 필드 파싱 ─────────────────────────────────────────
 function parseUserInfo(body) {
   const fields = {};
 
   const osLine = body.match(/デバイスOS[：:]\s*(.+)/);
   if (osLine) {
+    // OS버전 → cf_os
     fields.cf_os = osLine[1].trim();
 
+    // OS종류 → cf_os771346
     const os = osLine[1].toLowerCase();
     if (os.includes('ios') || os.includes('iphone') || os.includes('ipad')) {
       fields.cf_os771346 = 'iOS';
@@ -90,24 +105,27 @@ function parseUserInfo(body) {
       fields.cf_os771346 = 'Android';
     }
 
-    // 스마트폰 기종: OS 종류와 버전 번호 제거 후 기기명 추출
+    // 스마트폰 기종 → cf_rand515280
     const deviceMatch = osLine[1].match(/(?:iOS|Android)\s+[\d.]+\s+(.+?)(?:\s+sdk\d+)?$/i);
     if (deviceMatch) fields.cf_rand515280 = deviceMatch[1].trim();
   }
 
+  // 앱버전 → cf_rand296759
   const appMatch = body.match(/アプリのバージョン[：:]\s*(.+)/);
   if (appMatch) fields.cf_rand296759 = appMatch[1].trim();
 
+  // 펌웨어 → cf_rand655376
   const fwMatch = body.match(/ファームウェアのバージョン[：:]\s*(.+)/);
   if (fwMatch) fields.cf_rand655376 = fwMatch[1].trim();
 
+  // 증상 → cf_rand931886
   const symptom = detectSymptom(body);
   if (symptom) fields.cf_rand931886 = symptom;
 
   return fields;
 }
 
-// Freshdesk 유형 필드 값 — Admin > Ticket Fields > Type 에서 설정한 값과 일치해야 함
+// ── 유형 매핑 (Freshdesk 실제 옵션: 질문/기능장애/기기장애/요청/반품/기타)
 function mapTicketType(type) {
   const map = {
     '初期不良':   '기기장애',
@@ -122,23 +140,16 @@ function mapTicketType(type) {
   return map[type] || '질문';
 }
 
-// 우선순위: 1=Low, 2=Medium, 3=High, 4=Urgent
+// ── 우선순위 (1=Low, 2=Medium, 3=High, 4=Urgent)
 function detectPriority(subject, body) {
   const t = subject + ' ' + body;
-
-  // 긴급 — 안전 문제, 화재, 부상, 매우 급하다는 표현
-  if (/火花|発火|煙|やけど|怪我|危険|緊急|至急|早急/.test(t)) return 4;
-
-  // 높음 — 완전히 사용 불가, 2회 이상 불량, 반품/환불 요구
+  if (/火花|発火|煙|やけど|怪我|危険|緊急|至急|早急/.test(t))                        return 4;
   if (/全く使えない|完全に.*壊れ|また故障|再度.*不具合|交換品.*壊|2回目|返品|返金/.test(t)) return 3;
-
-  // 보통 — 주요 기능 문제
-  if (/充電できない|接続できない|測定.*されない|LED.*点灯しない|不具合|故障/.test(t)) return 2;
-
-  // 낮음 — 일반 문의
+  if (/充電できない|接続できない|測定.*されない|LED.*点灯しない|不具合|故障/.test(t))    return 2;
   return 1;
 }
 
+// ── 증상 자동 분류
 function detectSymptom(body) {
   if (/充電できない|充電不可|充電.*でき|LEDが点灯しない|充電.*つかない/.test(body))  return '충전 불가';
   if (/充電.*異常|充電.*おかしい|充電.*止まる|充電.*すぐ切れ/.test(body))            return '충전 이상';
