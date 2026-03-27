@@ -48,8 +48,39 @@ async function getConversations(id) {
 }
 
 async function addNote(id, body) {
-  const html = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-  const r = await fdFetch(`/tickets/${id}/notes`, { method: 'POST', body: JSON.stringify({ body: html, private: true }) });
+  const html = body
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+
+  const escaped = body.replace(/`/g, '\\`');
+
+  const noteHtml = `
+<div style="margin-bottom:12px;">
+  <button 
+    onclick="
+      var t=document.createElement('textarea');
+      t.value=\`${escaped}\`;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand('copy');
+      document.body.removeChild(t);
+      this.innerText='✓ コピー済み';
+      this.style.background='#059669';
+    "
+    style="background:#2563EB;color:white;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold;">
+    📋 返信内容をコピー
+  </button>
+  <span style="font-size:11px;color:#888;margin-left:8px;">返信欄に貼り付けてSendしてください</span>
+</div>
+<hr>
+${html}`;
+
+  const r = await fdFetch(`/tickets/${id}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ body: noteHtml, private: true }),
+  });
   if (!r.ok) throw new Error(`note failed: ${r.status}`);
 }
 
