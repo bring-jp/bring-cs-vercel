@@ -54,28 +54,23 @@ async function addNote(id, body) {
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>');
 
-  const escaped = body.replace(/`/g, '\\`');
-
   const noteHtml = `
-<div style="margin-bottom:12px;">
-  <button 
-    onclick="
-      var t=document.createElement('textarea');
-      t.value=\`${escaped}\`;
-      document.body.appendChild(t);
-      t.select();
-      document.execCommand('copy');
-      document.body.removeChild(t);
-      this.innerText='✓ コピー済み';
-      this.style.background='#059669';
-    "
-    style="background:#2563EB;color:white;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold;">
-    📋 返信内容をコピー
-  </button>
-  <span style="font-size:11px;color:#888;margin-left:8px;">返信欄に貼り付けてSendしてください</span>
+<div style="margin-bottom:16px;background:#EFF6FF;padding:12px;border-radius:8px;border:1px solid #BFDBFE;">
+  <p style="margin:0 0 8px;font-size:13px;color:#1E40AF;font-weight:bold;">📋 AI 자동 생성 회신 초안</p>
+  <p style="margin:0;font-size:12px;color:#3B82F6;">아래 텍스트를 선택 후 복사(Cmd+C / Ctrl+C)해서 답장 창에 붙여넣으세요.</p>
 </div>
-<hr>
-${html}`;
+<div 
+  onclick="
+    var range=document.createRange();
+    range.selectNodeContents(this);
+    var sel=window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  "
+  style="background:#F8FAFC;border:2px dashed #93C5FD;border-radius:8px;padding:16px;cursor:text;font-size:13px;line-height:1.8;white-space:pre-wrap;font-family:sans-serif;">
+${html}
+</div>
+<p style="font-size:11px;color:#94A3B8;margin-top:8px;">💡 위 박스 클릭 시 전체 선택됩니다. Cmd+C(Mac) 또는 Ctrl+C(Windows)로 복사하세요.</p>`;
 
   const r = await fdFetch(`/tickets/${id}/notes`, {
     method: 'POST',
