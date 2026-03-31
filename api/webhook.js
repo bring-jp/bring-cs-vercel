@@ -339,7 +339,7 @@ async function getGoogleAccessToken() {
 
 async function appendToSheet(info) {
   const sheetId   = process.env.GOOGLE_SHEET_ID;
-  const sheetName = '반품확인 시트';
+  const sheetName = '교환품 대응';
   if (!sheetId) { console.warn('[sheets] GOOGLE_SHEET_ID not set'); return; }
 
   try {
