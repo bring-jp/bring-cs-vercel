@@ -389,6 +389,7 @@ async function appendToSheet(info) {
       throw new Error(`Sheets append failed: ${appendRes.status} ${errText}`);
     }
     console.log(`[sheets] ticket#${info.ticketId} 교환정보 기록 완료`);
+    await addTag(info.ticketId, '배송처입력완료');
   } catch (e) {
     console.error('[sheets] error:', e.message);
     // Sheets 오류가 나도 webhook 전체는 계속 진행
