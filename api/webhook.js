@@ -288,15 +288,24 @@ function parseExchangeInfo(body, requesterName, ticketId) {
   // 접수일
   const today = new Date().toLocaleDateString('ja-JP', { year:'numeric', month:'2-digit', day:'2-digit' }).replace(/\//g,'/');
 
+  // 우편번호 (7자리 숫자)
+  const zipPat = body.match(/(?:郵便番号|〒)?\s*(\d{3}[-ー]\d{4})/);
+  const zip = zipPat ? zipPat[1].replace(/ー/, '-') : '';
+
+  // 이메일
+  const emailPat = body.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  const email = emailPat ? emailPat[0] : '';
+
   return {
     ticketId,
     name,
+    email,
     store,
     receivedDate: today,
     product,
-    customerName: name,
     orderNo,
     address,
+    zip,
     tel,
   };
 }
@@ -345,38 +354,39 @@ async function appendToSheet(info) {
   try {
     const token = await getGoogleAccessToken();
 
-    // 시트의 현재 마지막 행 번호 확인 (번호 자동증가용)
-    const rangeCheck = encodeURIComponent(`${sheetName}!A:A`);
-    const checkRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${rangeCheck}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const checkData = await checkRes.json();
-    const existingRows = (checkData.values || []).length;
-    const nextNum = Math.max(existingRows, 1); // 헤더 제외한 데이터 행 수 = 다음 번호
+    // 출력일시
+    const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 
-    // 시트 컬럼 순서: 번호/구입자명/판매처/접수일/제품/고객이름/주문번호/진행상황/담당자/사유/비고/계좌정보/반품도착일/환불일/환불금액
+    // 실제 컬럼 순서:
+    // A:No. / B:이메일 / C:판매채널 / D:접수일 / E:교환품 / F:품번
+    // G:고객이름 / H:전화번호 / I:우편번호 / J:배송주소
+    // K:진행상황 / L:추적번호 / M:발송일 / N:반품도착일 / O:반품도착품
+    // P:주문번호 / Q:출력일시 / R:비고
     const row = [
-      nextNum,            // A: 번호
-      info.name,          // B: 구입자명
-      info.store,         // C: 판매처
-      info.receivedDate,  // D: 접수일
-      info.product,       // E: 제품
-      info.customerName,  // F: 고객 이름
-      info.orderNo,       // G: 주문번호
-      '',                 // H: 진행상황 (수동)
-      '',                 // I: 담당자 (수동)
-      `교환 #${info.ticketId}`, // J: 사유
-      info.address ? `주소: ${info.address}` + (info.tel ? ` / TEL: ${info.tel}` : '') : '', // K: 비고
-      '',                 // L: 계좌정보 (수동)
-      '',                 // M: 반품 도착일 (수동)
-      '',                 // N: 환불일 (수동)
-      '',                 // O: 환불 금액 (수동)
+      '',                    // A: No. (수동)
+      info.email,            // B: 이메일
+      info.store,            // C: 판매채널
+      info.receivedDate,     // D: 접수일
+      info.product,          // E: 교환품
+      '',                    // F: 품번 (수동)
+      info.name,             // G: 고객 이름
+      info.tel,              // H: 전화번호
+      info.zip,              // I: 우편번호
+      info.address,          // J: 배송주소
+      '',                    // K: 진행상황 (수동)
+      '',                    // L: 추적번호 (수동)
+      '',                    // M: 발송일 (수동)
+      '',                    // N: 반품 도착일 (수동)
+      '',                    // O: 반품 도착품 (수동)
+      info.orderNo,          // P: 주문번호
+      now,                   // Q: 출력일시
+      `FD#${info.ticketId}`, // R: 비고 (Freshdesk 티켓번호)
     ];
 
-    const appendRange = encodeURIComponent(`${sheetName}!A:O`);
+    // 2행에 삽입 (최신 데이터가 위로 오도록)
+    const insertRange = encodeURIComponent(`${sheetName}!A2:R2`);
     const appendRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${appendRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${insertRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
