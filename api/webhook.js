@@ -86,9 +86,6 @@ Pro充電：非接触式に近い構造。電極位置がずれると「充電�
 医療機器のような表現・根拠のない改善保証・顧客責任の断定・社内事情の説明・
 「（不明な場合は空欄で結構です）」の文言・CS側からの直接返金提案`;
 
-// ─────────────────────────────────────────────
-// Freshdesk helpers
-// ─────────────────────────────────────────────
 function fdFetch(path, opts = {}) {
   const auth = Buffer.from(`${FD_API_KEY}:X`).toString('base64');
   return fetch(`https://${FD_DOMAIN}/api/v2${path}`, {
@@ -159,9 +156,6 @@ async function updateFields(id, payload) {
   } catch (e) { console.warn('[fields]', e.message); }
 }
 
-// ─────────────────────────────────────────────
-// 분류 / 우선순위 / 필드 파싱
-// ─────────────────────────────────────────────
 function classify(s, b) {
   const t = s + ' ' + b;
   if (/また故障|再度.*交換|交換品.*壊/.test(t))                             return '재불량';
@@ -235,180 +229,6 @@ function symptom(b) {
   return null;
 }
 
-// ─────────────────────────────────────────────
-// 교환정보 감지 & 파싱
-// ─────────────────────────────────────────────
-
-// 도도부현 목록
-const PREFECTURES = ['北海道','青森','岩手','宮城','秋田','山形','福島','茨城','栃木','群馬',
-  '埼玉','千葉','東京','神奈川','新潟','富山','石川','福井','山梨','長野',
-  '岐阜','静岡','愛知','三重','滋賀','京都','大阪','兵庫','奈良','和歌山',
-  '鳥取','島根','岡山','広島','山口','徳島','香川','愛媛','高知','福岡',
-  '佐賀','長崎','熊本','大分','宮崎','鹿児島','沖縄'];
-
-function detectExchangeInfo(body) {
-  const hasAddress = PREFECTURES.some(p => body.includes(p));
-  const hasOrderNo = /(?:注文番号|オーダーNo|Order\s*No|注文No)[^\n：:]*[：:]\s*[\w\-]+/i.test(body)
-    || /\d{3}-\d{7}-\d{7}/.test(body)       // Amazon 형식
-    || /\d{9,}/i.test(body);                 // 기타 숫자 주문번호
-  return hasAddress && hasOrderNo;
-}
-
-function parseExchangeInfo(body, requesterName, ticketId) {
-  // 이름
-  const namePat = body.match(/(?:お名前|氏名|名前)[：:\s]*([^\n　]{2,20})/);
-  const name = namePat ? namePat[1].trim() : requesterName;
-
-  // 주문번호 (Amazon / 숫자 형식 / 라벨 뒤)
-  const orderPat = body.match(/(?:注文番号|オーダーNo|Order\s*No|注文No)[^\n：:]*[：:]\s*([\w\-]+)/i)
-    || body.match(/(\d{3}-\d{7}-\d{7})/);
-  const orderNo = orderPat ? orderPat[1].trim() : '';
-
-  // 구입처 (Amazon / 楽天 / Makuake / ヨドバシ 등)
-  const storePat = body.match(/(?:Amazon|楽天|Rakuten|Makuake|ヨドバシ|ヤマダ|PayPay)/i);
-  const store = storePat ? storePat[0] : '';
-
-  // 주소 (도도부현 포함 줄 추출)
-  const addrPat = PREFECTURES.map(p => {
-    const idx = body.indexOf(p);
-    if (idx === -1) return null;
-    const line = body.slice(Math.max(0, idx - 10), idx + 60).split(/\n/)[0];
-    return line.trim();
-  }).filter(Boolean);
-  const address = addrPat[0] || '';
-
-  // 전화번호
-  const telPat = body.match(/(?:電話番号|TEL|Tel|tel)[：:\s]*([\d\-\(\)０-９]{8,})/);
-  const tel = telPat ? telPat[1].trim() : '';
-
-  // 제품 (모델·사이즈·색상)
-  const prodPat = body.match(/(?:モデル|製品|商品|リングサイズ|サイズ)[：:\s]*([^\n]{3,40})/);
-  const product = prodPat ? prodPat[1].trim() : '';
-
-  // 접수일
-  const today = new Date().toLocaleDateString('ja-JP', { year:'numeric', month:'2-digit', day:'2-digit' }).replace(/\//g,'/');
-
-  // 우편번호 (7자리 숫자)
-  const zipPat = body.match(/(?:郵便番号|〒)?\s*(\d{3}[-ー]\d{4})/);
-  const zip = zipPat ? zipPat[1].replace(/ー/, '-') : '';
-
-  // 이메일
-  const emailPat = body.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
-  const email = emailPat ? emailPat[0] : '';
-
-  return {
-    ticketId,
-    name,
-    email,
-    store,
-    receivedDate: today,
-    product,
-    orderNo,
-    address,
-    zip,
-    tel,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Google Sheets 기록
-// ─────────────────────────────────────────────
-async function getGoogleAccessToken() {
-  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!serviceAccountJson) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON not set');
-
-  const sa = JSON.parse(serviceAccountJson);
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: sa.client_email,
-    scope: 'https://www.googleapis.com/auth/spreadsheets',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  };
-
-  // JWT 생성 (RS256) — Node.js 내장 crypto 사용
-  const crypto = require('crypto');
-  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-  const body   = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sign   = crypto.createSign('RSA-SHA256');
-  sign.update(`${header}.${body}`);
-  const sig = sign.sign(sa.private_key, 'base64url');
-  const jwt = `${header}.${body}.${sig}`;
-
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
-  });
-  if (!tokenRes.ok) throw new Error(`Token fetch failed: ${tokenRes.status}`);
-  const tokenData = await tokenRes.json();
-  return tokenData.access_token;
-}
-
-async function appendToSheet(info) {
-  const sheetId   = process.env.GOOGLE_SHEET_ID;
-  const sheetName = '교환품 대응';
-  if (!sheetId) { console.warn('[sheets] GOOGLE_SHEET_ID not set'); return; }
-
-  try {
-    const token = await getGoogleAccessToken();
-
-    // 출력일시
-    const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-
-    // 실제 컬럼 순서:
-    // A:No. / B:이메일 / C:판매채널 / D:접수일 / E:교환품 / F:품번
-    // G:고객이름 / H:전화번호 / I:우편번호 / J:배송주소
-    // K:진행상황 / L:추적번호 / M:발송일 / N:반품도착일 / O:반품도착품
-    // P:주문번호 / Q:출력일시 / R:비고
-    const row = [
-      '',                    // A: No. (수동)
-      info.email,            // B: 이메일
-      info.store,            // C: 판매채널
-      info.receivedDate,     // D: 접수일
-      info.product,          // E: 교환품
-      '',                    // F: 품번 (수동)
-      info.name,             // G: 고객 이름
-      info.tel,              // H: 전화번호
-      info.zip,              // I: 우편번호
-      info.address,          // J: 배송주소
-      '',                    // K: 진행상황 (수동)
-      '',                    // L: 추적번호 (수동)
-      '',                    // M: 발송일 (수동)
-      '',                    // N: 반품 도착일 (수동)
-      '',                    // O: 반품 도착품 (수동)
-      info.orderNo,          // P: 주문번호
-      now,                   // Q: 출력일시
-      `FD#${info.ticketId}`, // R: 비고 (Freshdesk 티켓번호)
-    ];
-
-    // 2행에 삽입 (최신 데이터가 위로 오도록)
-    const insertRange = encodeURIComponent(`${sheetName}!A2:R2`);
-    const appendRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${insertRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values: [row] }),
-      }
-    );
-
-    if (!appendRes.ok) {
-      const errText = await appendRes.text();
-      throw new Error(`Sheets append failed: ${appendRes.status} ${errText}`);
-    }
-    console.log(`[sheets] ticket#${info.ticketId} 교환정보 기록 완료`);
-    await addTag(info.ticketId, '배송처입력완료');
-  } catch (e) {
-    console.error('[sheets] error:', e.message);
-    // Sheets 오류가 나도 webhook 전체는 계속 진행
-  }
-}
-
-// ─────────────────────────────────────────────
-// 메인 핸들러
-// ─────────────────────────────────────────────
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -430,13 +250,6 @@ module.exports = async (req, res) => {
     const fields   = parseFields(description_text);
     const prio     = priority(subject, description_text);
     const ttype    = ticketType(type);
-
-    // ── 교환정보 감지 → Google Sheets 기록 ──
-    if (detectExchangeInfo(description_text)) {
-      console.log(`[webhook] ticket#${ticketId} 교환정보 감지됨 → Sheets 기록 시작`);
-      const info = parseExchangeInfo(description_text, requester_name, ticketId);
-      await appendToSheet(info);
-    }
 
     const userMsg = hasHist
       ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${convs.map(c=>`${c.role==='support'?'【CS返信】':'【お客様】'} (${c.date})\n${c.body}`).join('\n\n')}\n\n━━━ 最新のお客様メッセージ ━━━\n差出人：${requester_name}\n件名：${subject}\n\n${description_text}`
