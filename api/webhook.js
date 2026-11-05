@@ -168,7 +168,7 @@ async function getKnowledge() {
   return knowledgeCache;
 }
 
-const AI_MARK = 'ai-draft-v2'; // 내부 메모 식별용 (중복 실행 방지)
+const AI_MARK = 'ai-draft-v2'; // 내부 메모 식별용 (중복 실행 방지). Freshdesk는 HTML 주석을 지우므로 본문에 보이는 텍스트로 넣는다
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -204,7 +204,7 @@ async function getConversations(id) {
       const at = new Date(c.created_at).getTime();
       const raw = c.body || c.body_text || '';
       if (c.private) {
-        if (raw.includes(AI_MARK) && at > lastAiAt) lastAiAt = at;
+        if ((raw.includes(AI_MARK) || raw.includes('AI 자동 생성 회신 초안')) && at > lastAiAt) lastAiAt = at;
         continue;
       }
       if (c.incoming && at > lastCustomerAt) lastCustomerAt = at;
@@ -233,9 +233,8 @@ async function addNote(id, body, meta = {}) {
   ${meta.flag ? `<p style="margin:0 0 4px;font-size:12px;color:#B91C1C;">주의: ${esc(meta.flag)}</p>` : ''}`;
 
   const noteHtml = `
-<!-- ${AI_MARK} -->
 <div style="margin-bottom:16px;background:#EFF6FF;padding:12px;border-radius:8px;border:1px solid #BFDBFE;">
-  <p style="margin:0 0 8px;font-size:13px;color:#1E40AF;font-weight:bold;">📋 AI 자동 생성 회신 초안 (발송 전 확인 필수)</p>
+  <p style="margin:0 0 8px;font-size:13px;color:#1E40AF;font-weight:bold;">📋 AI 자동 생성 회신 초안 (발송 전 확인 필수) <span style="font-weight:normal;color:#9CA3AF;font-size:11px;">#${AI_MARK}</span></p>
   ${metaHtml}
   <p style="margin:6px 0 0;font-size:12px;color:#3B82F6;">아래 텍스트를 선택 후 복사(Cmd+C / Ctrl+C)해서 답장 창에 붙여넣으세요.</p>
 </div>
