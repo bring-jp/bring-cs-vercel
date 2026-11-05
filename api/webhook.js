@@ -16,16 +16,23 @@ const SYMPTOMS = ['충전 불가', '충전 이상', '펌웨어 업데이트', '�
   '혈중산소 이상', '체온 없음', '체온 이상', '데이터 공백', '물리적 파손', '로그인 불가', '로그아웃 빈발',
   '실시간측정 불가', 'AI레포트 없음', 'AI식단 없음', '운동모드'];
 
-const CS_PROMPT = `あなたはb.ring日本向けカスタマーサポート専用アシスタントです。
+// ── 固定ルール（コードで管理。薬機法・形式など担当者が誤って消せないようにする） ──
+const CS_RULES_HEAD = `あなたはb.ring日本向けカスタマーサポート専用アシスタントです。
 
 【メール形式（固定）】
 書き出し：「お客様\n\nb.ringカスタマーサポートでございます。」
 署名：「b.ringカスタマーサポート」
 本文トピック区切り：「───────────────」を使用
 文体：丁寧だが過度に重くない。不要な謝罪の繰り返し・重複内容・件名生成は禁止。
-過去のやり取りがある場合は重複した確認や質問をしないこと。
+過去のやり取りがある場合は重複した確認や質問をしないこと。`;
 
-【アプリ主要パス】
+const CS_RULES_TAIL = `
+【禁止事項】
+医療機器のような表現・根拠のない改善保証・顧客責任の断定・社内事情の説明・
+「（不明な場合は空欄で結構です）」の文言・CS側からの直接返金提案`;
+
+// ── 製品知識（Google ドキュメントで管理。CS_KNOWLEDGE_DOC_ID 未設定や取得失敗時はこの内蔵版を使う） ──
+const CS_KNOWLEDGE_BUILTIN = `【アプリ主要パス】
 - 再接続：マイページ > リングを接続する
 - 初期化：マイページ > スマートリング設定 > デバイス初期化
 - 自動測定：マイページ > 自動測定モード（標準／省電力／深層分析）
@@ -92,11 +99,70 @@ Pro充電：非接触式に近い構造。電極位置がずれると「充電�
 - ホーム画面SpO₂グラフ：現在未対応（開発チーム認知中）
 - カロリーのみ修正→他栄養素は連動しない（全項目修正が必要）
 - 1日推奨カロリー：プロフィール（年齢・身長・体重）から自動算出。任意設定は現在未対応。
-- +メッセージ：SMS系サービスのためアカウント登録不可。通常メールアドレスを使用。
+- +メッセージ：SMS系サービスのためアカウント登録不可。通常メールアドレスを使用。`;
 
-【禁止事項】
-医療機器のような表現・根拠のない改善保証・顧客責任の断定・社内事情の説明・
-「（不明な場合は空欄で結構です）」の文言・CS側からの直接返金提案`;
+function buildPrompt(knowledge) {
+  return CS_RULES_HEAD + '\n\n' + (knowledge || CS_KNOWLEDGE_BUILTIN).trim() + '\n' + CS_RULES_TAIL;
+}
+
+
+// ── 知識ベース（Google ドキュメント）を Service Account で読む ──
+// 必要な環境変数: GOOGLE_SERVICE_ACCOUNT_JSON（既存）, CS_KNOWLEDGE_DOC_ID
+// ドキュメントは Service Account のメールアドレスに「閲覧者」で共有しておくこと（/api/health に表示）
+const crypto = require('crypto');
+const KNOWLEDGE_DOC_ID = process.env.CS_KNOWLEDGE_DOC_ID;
+const KNOWLEDGE_TTL_MS = 10 * 60 * 1000;
+let knowledgeCache = { text: '', at: 0, source: 'builtin', error: '' };
+
+function loadServiceAccount() {
+  try { return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || ''); } catch { return null; }
+}
+
+function b64url(buf) {
+  return Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+async function googleAccessToken(sa, scope) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({ iss: sa.client_email, scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 }));
+  const sig = crypto.createSign('RSA-SHA256').update(`${header}.${claim}`).end().sign(sa.private_key);
+  const jwt = `${header}.${claim}.${b64url(sig)}`;
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
+  });
+  if (!r.ok) throw new Error(`google token ${r.status}`);
+  return (await r.json()).access_token;
+}
+
+async function fetchKnowledgeDoc() {
+  const sa = loadServiceAccount();
+  if (!sa || !KNOWLEDGE_DOC_ID) throw new Error('knowledge: not configured');
+  const token = await googleAccessToken(sa, 'https://www.googleapis.com/auth/drive.readonly');
+  const h = { Authorization: `Bearer ${token}` };
+  // Google ドキュメント → export、プレーンテキスト等 → alt=media
+  let r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}/export?mimeType=text/plain`, { headers: h });
+  if (!r.ok) r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}?alt=media`, { headers: h });
+  if (!r.ok) throw new Error(`knowledge: drive ${r.status}`);
+  const text = (await r.text()).replace(/^﻿/, '').trim();
+  if (text.length < 200 || !text.includes('【')) throw new Error('knowledge: doc looks empty or malformed');
+  return text;
+}
+
+async function getKnowledge() {
+  if (knowledgeCache.text && Date.now() - knowledgeCache.at < KNOWLEDGE_TTL_MS) return knowledgeCache;
+  try {
+    const text = await fetchKnowledgeDoc();
+    knowledgeCache = { text, at: Date.now(), source: 'drive', error: '' };
+  } catch (e) {
+    console.warn('[knowledge]', e.message);
+    // 取得失敗: 前回取得分があればそれを、なければ内蔵版
+    knowledgeCache = { text: knowledgeCache.text || '', at: Date.now(), source: knowledgeCache.text ? 'drive-stale' : 'builtin', error: e.message };
+  }
+  return knowledgeCache;
+}
 
 const AI_MARK = 'ai-draft-v2'; // 내부 메모 식별용 (중복 실행 방지)
 
@@ -327,7 +393,7 @@ const DATA_NOTE = `
 - 営業・広告・採用・提携の売り込みなど顧客サポート対象外は category を 영업·스팸 とし、draft は空文字にする。
 - 結果は必ず cs_result ツールで返すこと。`;
 
-async function runClaude(userMsg) {
+async function runClaude(userMsg, systemPrompt) {
   const call = () => fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -339,7 +405,7 @@ async function runClaude(userMsg) {
       model: ANTHROPIC_MODEL,
       max_tokens: 2048,
       temperature: 0.3,
-      system: CS_PROMPT + DATA_NOTE,
+      system: systemPrompt + DATA_NOTE,
       tools: [RESULT_TOOL],
       tool_choice: { type: 'tool', name: 'cs_result' },
       messages: [{ role: 'user', content: userMsg }],
@@ -354,17 +420,17 @@ async function runClaude(userMsg) {
   return tu.input;
 }
 
-async function runOpenAI(userMsg) {
+async function runOpenAI(userMsg, systemPrompt) {
   const OpenAI = require('openai');
   const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   const comp = await openai.chat.completions.create({
     model: 'gpt-4o-mini', max_tokens: 1024, temperature: 0.3,
-    messages: [{ role: 'system', content: CS_PROMPT }, { role: 'user', content: userMsg }],
+    messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMsg }],
   });
   return { draft: comp.choices[0]?.message?.content || '' };
 }
 
-module.exports = async (req, res) => {
+const handler = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end();
 
   if (!process.env.FRESHDESK_WEBHOOK_SECRET)
@@ -399,21 +465,32 @@ module.exports = async (req, res) => {
       ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${convs.map(c=>`${c.role==='support'?'【CS返信】':'【お客様】'} (${c.date})\n${c.body}`).join('\n\n')}\n\n━━━ 最新のお客様メッセージ ━━━\n差出人：${requester_name}\n件名：${subject}\n\n${description_text}`
       : `以下のCS問い合わせに返信メールを作成してください。\n\n差出人：${requester_name}\n件名：${subject}\n\n本文：\n${description_text}`;
 
+    const kb = await getKnowledge();
+    const systemPrompt = buildPrompt(kb.text);
+
     let engine = 'claude';
     let ai;
     if (ANTHROPIC_API_KEY) {
-      ai = await runClaude(userMsg);
+      try {
+        ai = await runClaude(userMsg, systemPrompt);
+      } catch (e) {
+        // Claude 側の障害時は OpenAI をバックアップに使う（下書きのみ。分類はキーワード判定のまま）
+        if (!OPENAI_API_KEY) throw e;
+        console.warn('[webhook] claude failed, fallback to openai:', e.message);
+        engine = 'openai-fallback';
+        ai = await runOpenAI(userMsg, systemPrompt);
+      }
       if (CATEGORIES.includes(ai.category)) type = ai.category;
       // 優先度はキーワード判定と AI の高い方（安全系を下げない）
       if ([1, 2, 3, 4].includes(ai.priority)) prio = Math.max(prio, ai.priority);
       if (ai.symptom && SYMPTOMS.includes(ai.symptom)) fields.cf_rand931886 = ai.symptom;
     } else {
       engine = 'openai';
-      ai = await runOpenAI(userMsg);
+      ai = await runOpenAI(userMsg, systemPrompt);
     }
     const draft = ai.draft || '';
     const ttype = ticketType(type);
-    console.log(`[webhook] ticket#${ticketId} done engine=${engine} type=${type} prio=${prio} lang=${ai.language || '-'}`);
+    console.log(`[webhook] ticket#${ticketId} done engine=${engine} kb=${kb.source} type=${type} prio=${prio} lang=${ai.language || '-'}`);
 
     await addTag(ticketId, type);
 
@@ -440,3 +517,8 @@ module.exports = async (req, res) => {
     res.status(200).json({ success: false, error: err.message });
   }
 };
+
+module.exports = handler;
+module.exports.getKnowledge = getKnowledge;
+module.exports.serviceAccountEmail = () => (loadServiceAccount() || {}).client_email || null;
+module.exports.CS_KNOWLEDGE_BUILTIN = CS_KNOWLEDGE_BUILTIN;

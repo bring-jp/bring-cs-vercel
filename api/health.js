@@ -1,17 +1,30 @@
-module.exports = (req, res) => {
+const webhook = require('./webhook.js');
+
+module.exports = async (req, res) => {
+  let knowledge = { source: 'unknown', chars: 0, error: '' };
+  try {
+    const kb = await webhook.getKnowledge();
+    knowledge = { source: kb.source, chars: (kb.text || webhook.CS_KNOWLEDGE_BUILTIN || '').length, fetched_at: kb.at ? new Date(kb.at).toISOString() : null, error: kb.error || '' };
+  } catch (e) { knowledge.error = e.message; }
+
   res.status(200).json({
     status: 'ok',
     service: 'b.ring CS Webhook',
     time: new Date().toISOString(),
     env: {
-      ai_engine:      process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'none'),
-      anthropic:      !!process.env.ANTHROPIC_API_KEY,
+      ai_engine:       process.env.ANTHROPIC_API_KEY ? 'claude' : (process.env.OPENAI_API_KEY ? 'openai' : 'none'),
+      anthropic:       !!process.env.ANTHROPIC_API_KEY,
       anthropic_model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
-      openai:         !!process.env.OPENAI_API_KEY,
-      freshdesk:      !!process.env.FRESHDESK_API_KEY,
-      domain:         process.env.FRESHDESK_DOMAIN || 'not set',
-      webhook_secret: !!process.env.FRESHDESK_WEBHOOK_SECRET,
-      slack_cs:       !!process.env.SLACK_CS_WEBHOOK_URL,
+      openai_backup:   !!process.env.OPENAI_API_KEY,
+      freshdesk:       !!process.env.FRESHDESK_API_KEY,
+      domain:          process.env.FRESHDESK_DOMAIN || 'not set',
+      webhook_secret:  !!process.env.FRESHDESK_WEBHOOK_SECRET,
+      slack_cs:        !!process.env.SLACK_CS_WEBHOOK_URL,
+    },
+    knowledge: {
+      doc_id:                process.env.CS_KNOWLEDGE_DOC_ID || 'not set',
+      service_account_email: webhook.serviceAccountEmail() || 'not set',
+      ...knowledge,
     },
   });
 };
