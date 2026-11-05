@@ -2,7 +2,7 @@
   "framework": null,
   "functions": {
     "api/webhook.js": {
-      "maxDuration": 30
+      "maxDuration": 60
     }
   }
 }
