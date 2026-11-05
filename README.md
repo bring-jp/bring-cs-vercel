@@ -15,7 +15,17 @@ b.ring 일본 CS 자동화. Freshdesk에 티켓이 생기거나 고객 답장이
 4. 티켓에 태그, 우선순위, 유형, 사용자 정의 필드(OS, 앱, FW, 증상)를 넣고 초안을 내부 메모로 남긴다.
 5. 우선순위 4(발화·발연·부상·소비자센터·법적 조치 언급)는 #브링cs Slack으로 즉시 알린다. 처리 오류도 같은 채널로 알린다.
 
-`ANTHROPIC_API_KEY`가 없으면 예전처럼 OpenAI(gpt-4o-mini)로 초안만 만든다.
+Claude 호출이 실패하면(키 문제, 장애) `OPENAI_API_KEY`가 있을 때 OpenAI(gpt-4o-mini)로 한 번 더 시도한다. 메모 헤더의 engine 값으로 어느 쪽이 썼는지 알 수 있다.
+
+## 지식 베이스 (Google Doc)
+
+AI가 참조하는 제품 사양·앱 경로·CS 정책은 코드가 아니라 Google Doc **「b.ring_CS_知識ベース（AI回答案用）」** 에 있다.
+
+- 함수는 `GOOGLE_SERVICE_ACCOUNT_JSON`의 서비스 계정으로 `CS_KNOWLEDGE_DOC_ID` 문서를 읽는다(문서를 그 서비스 계정 이메일에 뷰어로 공유해 둘 것. 이메일은 `/api/health`의 `knowledge.service_account_email`).
+- 10분 캐시. 문서를 고치면 재배포 없이 최대 10분 내 반영.
+- 읽기 실패 시 직전에 읽은 내용 → 그것도 없으면 코드 내장본(`CS_KNOWLEDGE_BUILTIN`) 순으로 쓴다. 내장본은 비상용이므로 가끔 문서와 맞춰 둔다.
+- `/api/health`의 `knowledge.source`가 `drive`면 정상, `builtin`이면 문서를 못 읽고 있는 것.
+- 매주 금요일 Claude 스케줄 작업(22번)이 지난주 AI 초안과 담당자 실제 회신을 비교해 문서 수정안을 Slack으로 보낸다. 반영은 사람이 문서를 편집해서 한다.
 
 ## Vercel 환경변수
 
@@ -28,7 +38,9 @@ b.ring 일본 CS 자동화. Freshdesk에 티켓이 생기거나 고객 답장이
 | ANTHROPIC_MODEL | 선택 | 기본 `claude-sonnet-5-5` |
 | SLACK_CS_WEBHOOK_URL | 권장 | #브링cs Incoming Webhook 주소 |
 | SLACK_MENTION | 선택 | 긴급 알림 멘션. 기본 `<@U047X89UBJ7>` |
-| OPENAI_API_KEY | 선택 | Claude 키가 없을 때만 사용 |
+| OPENAI_API_KEY | 선택 | Claude 호출 실패 시 백업 |
+| CS_KNOWLEDGE_DOC_ID | 권장 | 지식 베이스 Google Doc ID. 없으면 코드 내장본 사용 |
+| GOOGLE_SERVICE_ACCOUNT_JSON | 권장 | 서비스 계정 JSON 전체. 지식 베이스 읽기용 |
 
 설정 후 Redeploy. `/api/health`에서 `ai_engine`이 `claude`로 보이면 정상.
 
