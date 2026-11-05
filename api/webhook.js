@@ -443,15 +443,22 @@ const handler = async (req, res) => {
   if (process.env.FRESHDESK_WEBHOOK_SECRET && secret !== process.env.FRESHDESK_WEBHOOK_SECRET)
     return res.status(401).json({ error: 'Unauthorized' });
 
-  const { ticket_id, id, subject='', requester_name='', description_text='' } = req.body;
+  const { ticket_id, id, subject='', requester_name='', description_text='', latest_reply='' } = req.body;
   const ticketId = String(ticket_id || id || '');
-  if (!ticketId || !description_text)
-    return res.status(400).json({ error: 'ticket_id and description_text required' });
+  // 고객 답장 규칙(チケットの更新)은 latest_reply = {{ticket.latest_public_comment}} 로 최신 답장을 보낸다.
+  // 신규 티켓 규칙(チケットの作成)은 description_text 만 보낸다.
+  const latest = stripHtml(String(latest_reply || '')).trim();
+  const firstMsg = String(description_text || '').trim();
+  if (!ticketId || (!firstMsg && !latest))
+    return res.status(400).json({ error: 'ticket_id and description_text (or latest_reply) required' });
 
-  console.log(`[webhook] ticket#${ticketId} "${subject}"`);
+  console.log(`[webhook] ticket#${ticketId} "${subject}"${latest ? ' (reply)' : ''}`);
 
   try {
-    const { convs, aiAfterLastCustomer } = await getConversations(ticketId);
+    let { convs, aiAfterLastCustomer } = await getConversations(ticketId);
+    // 답장 호출: 최신 고객 메시지는 latest_reply 로 받으므로, 대화 이력 끝의 같은 고객 메시지는 제거해 중복을 막는다
+    if (latest && convs.length && convs[convs.length - 1].role === 'customer') convs = convs.slice(0, -1);
+    const latestText = latest || firstMsg;
 
     // Freshdesk 自動化が同じ更新で複数回呼ぶことがある → 最新の顧客メッセージに対する初案が既にあればスキップ
     if (aiAfterLastCustomer) {
@@ -461,13 +468,13 @@ const handler = async (req, res) => {
 
     const hasHist  = convs.length > 0;
     // キーワード判定（AI 失敗時の土台、安全系キーワードの見落とし防止）
-    let type       = classify(subject, description_text);
-    const fields   = parseFields(description_text);
-    let prio       = priority(subject, description_text);
+    let type       = classify(subject, latestText);
+    const fields   = parseFields(latestText);
+    let prio       = priority(subject, latestText);
 
     const userMsg = hasHist
-      ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${convs.map(c=>`${c.role==='support'?'【CS返信】':'【お客様】'} (${c.date})\n${c.body}`).join('\n\n')}\n\n━━━ 最新のお客様メッセージ ━━━\n差出人：${requester_name}\n件名：${subject}\n\n${description_text}`
-      : `以下のCS問い合わせに返信メールを作成してください。\n\n差出人：${requester_name}\n件名：${subject}\n\n本文：\n${description_text}`;
+      ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${convs.map(c=>`${c.role==='support'?'【CS返信】':'【お客様】'} (${c.date})\n${c.body}`).join('\n\n')}\n\n━━━ 最新のお客様メッセージ ━━━\n差出人：${requester_name}\n件名：${subject}\n\n${latestText}`
+      : `以下のCS問い合わせに返信メールを作成してください。\n\n差出人：${requester_name}\n件名：${subject}\n\n本文：\n${latestText}`;
 
     const kb = await getKnowledge();
     const systemPrompt = buildPrompt(kb.text);

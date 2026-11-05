@@ -55,7 +55,13 @@ AI가 참조하는 제품 사양·앱 경로·CS 정책은 코드가 아니라 G
 {"ticket_id":"{{ticket.id}}","subject":"{{ticket.subject}}","requester_name":"{{ticket.requester.name}}","description_text":"{{ticket.description_text}}"}
 ```
 
-고객 답장 갱신 트리거에서는 `description_text` 대신 최신 답장 본문 placeholder(`{{ticket.latest_public_comment}}` 등 계정에서 제공되는 것)를 쓴다.
+고객 답장(チケットの更新) 규칙은 본문에 `"latest_reply":"{{ticket.latest_public_comment}}"` 를 추가한다. 함수는 latest_reply 가 있으면 그것을 최신 고객 메시지로 쓰고, description_text 는 첫 문의로만 취급한다.
+
+```json
+{"ticket_id":"{{ticket.id}}","subject":"{{ticket.subject}}","requester_name":"{{ticket.requester.name}}","description_text":"{{ticket.description_text}}","latest_reply":"{{ticket.latest_public_comment}}"}
+```
+
+- チケットの更新 규칙 설정: 実行者 = リクエスター / イベント = 返信が送信されました / 条件 없음(또는 ステータス ≠ Closed) / アクション = 위 웹훅.
 
 ## 로컬 테스트
 
