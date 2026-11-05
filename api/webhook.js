@@ -145,7 +145,11 @@ async function fetchKnowledgeDoc() {
   // Google ドキュメント → export、プレーンテキスト等 → alt=media
   let r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}/export?mimeType=text/plain`, { headers: h });
   if (!r.ok) r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}?alt=media`, { headers: h });
-  if (!r.ok) throw new Error(`knowledge: drive ${r.status}`);
+  if (!r.ok) {
+    let detail = '';
+    try { const j = await r.json(); detail = (j.error && j.error.message) || ''; } catch (_) {}
+    throw new Error(`knowledge: drive ${r.status} ${detail}`.trim().slice(0, 300));
+  }
   const text = (await r.text()).replace(/^﻿/, '').trim();
   if (text.length < 200 || !text.includes('【')) throw new Error('knowledge: doc looks empty or malformed');
   return text;
