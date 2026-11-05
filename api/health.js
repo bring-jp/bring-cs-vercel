@@ -7,6 +7,8 @@ module.exports = async (req, res) => {
     knowledge = { source: kb.source, chars: (kb.text || webhook.CS_KNOWLEDGE_BUILTIN || '').length, fetched_at: kb.at ? new Date(kb.at).toISOString() : null, error: kb.error || '' };
   } catch (e) { knowledge.error = e.message; }
 
+  res.setHeader('Access-Control-Allow-Origin', '*');   // 대시보드(아티팩트)에서 상태 조회용. 비밀값 없음
+  res.setHeader('Cache-Control', 'no-store');
   res.status(200).json({
     status: 'ok',
     service: 'b.ring CS Webhook',
