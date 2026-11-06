@@ -524,6 +524,7 @@ const handler = async (req, res) => {
     const systemPrompt = buildPrompt(kb.text);
 
     let engine = 'claude';
+    let fallbackReason = '';
     let ai;
     if (ANTHROPIC_API_KEY) {
       try {
@@ -533,6 +534,7 @@ const handler = async (req, res) => {
         if (!OPENAI_API_KEY) throw e;
         console.warn('[webhook] claude failed, fallback to openai:', e.message);
         engine = 'openai-fallback';
+        fallbackReason = String(e.message || e).slice(0, 200);
         ai = await runOpenAI(userMsg, systemPrompt);
       }
       if (CATEGORIES.includes(ai.category)) type = ai.category;
@@ -565,7 +567,7 @@ const handler = async (req, res) => {
       await notifySlack(`${SLACK_MENTION}\n**[CS 긴급·안전] Freshdesk #${ticketId}**\n제목: ${subject}\n분류: ${type}${ai.summary ? `\n요약: ${ai.summary}` : ''}${ai.flag ? `\n주의: ${ai.flag}` : ''}\n[티켓 열기](${ticketUrl(ticketId)})\n회신 초안은 티켓 내부 메모에 있습니다. 발송 전 확인 필요.`);
     }
 
-    res.status(200).json({ success: true, ticketId, engine, type, prio, language: ai.language });
+    res.status(200).json({ success: true, ticketId, engine, fallbackReason: fallbackReason || undefined, type, prio, language: ai.language });
   } catch (err) {
     console.error('[webhook] error:', err.message);
     await notifySlack(`**[CS 자동화 오류] Freshdesk #${ticketId}**\n제목: ${subject}\n오류: ${String(err.message).slice(0, 300)}\n[티켓 열기](${ticketUrl(ticketId)})\n회신 초안이 만들어지지 않았습니다. 직접 확인해 주세요.`);
