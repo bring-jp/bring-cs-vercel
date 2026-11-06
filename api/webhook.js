@@ -188,6 +188,31 @@ async function fdFetch(path, opts = {}) {
   return r;
 }
 
+// Freshdesk 가 보내는 본문을 최대한 관대하게 파싱한다
+function parseBody(b) {
+  if (b && typeof b === 'object') return b;
+  const raw = String(b || '');
+  try { return JSON.parse(raw); } catch (_) {}
+  // 문자열 값 안의 생 줄바꿈·탭·제어문자를 이스케이프해서 재시도
+  try {
+    let out = '', inStr = false, prev = '';
+    for (const ch of raw) {
+      if (ch === '"' && prev !== '\\') inStr = !inStr;
+      if (inStr && ch === '\n') out += '\\n';
+      else if (inStr && ch === '\r') out += '\\r';
+      else if (inStr && ch === '\t') out += '\\t';
+      else if (inStr && ch.charCodeAt(0) < 32) out += ' ';
+      else out += ch;
+      prev = ch;
+    }
+    return JSON.parse(out);
+  } catch (_) {}
+  const o = {};
+  const m = raw.match(/"ticket_id"\s*:\s*"?(\d+)/); if (m) o.ticket_id = m[1];
+  const sm = raw.match(/"subject"\s*:\s*"([^"\n]*)"/); if (sm) o.subject = sm[1];
+  return o;
+}
+
 function stripHtml(s) {
   return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
 }
@@ -442,22 +467,42 @@ const handler = async (req, res) => {
   if (process.env.FRESHDESK_WEBHOOK_SECRET && secret !== process.env.FRESHDESK_WEBHOOK_SECRET)
     return res.status(401).json({ error: 'Unauthorized' });
 
-  const { ticket_id, id, subject='', requester_name='', description_text='', latest_reply='' } = req.body;
-  const ticketId = String(ticket_id || id || '');
+  // Freshdesk 자동화의 "複雑" JSON은 placeholder 안의 줄바꿈·따옴표를 이스케이프하지 않아 깨진 JSON이 올 수 있다.
+  // 그 경우 req.body 는 문자열이다 → 최대한 복구하고, 안 되면 ticket_id 만이라도 뽑아낸다.
+  const body = parseBody(req.body);
+  const { ticket_id, id, subject='', requester_name='', description_text='', latest_reply='' } = body;
+  const ticketId = String(ticket_id || id || '').replace(/\D/g, '');
+  if (!ticketId) {
+    console.warn('[webhook] ticket_id 없음. body=', String(typeof req.body === 'string' ? req.body : JSON.stringify(req.body)).slice(0, 300));
+    // 400 을 계속 돌려주면 Freshdesk 가 규칙을 자동 비활성화하므로 200 으로 받고 로그만 남긴다
+    return res.status(200).json({ success: false, reason: 'ticket_id missing' });
+  }
   // 고객 답장 규칙(チケットの更新)은 latest_reply = {{ticket.latest_public_comment}} 로 최신 답장을 보낸다.
-  // 신규 티켓 규칙(チケットの作成)은 description_text 만 보낸다.
+  // 신규 티켓 규칙(チケットの作成)은 description_text 만 보낸다. 둘 다 비면 Freshdesk 에서 직접 읽는다.
   const latest = stripHtml(String(latest_reply || '')).trim();
   const firstMsg = String(description_text || '').trim();
-  if (!ticketId || (!firstMsg && !latest))
-    return res.status(400).json({ error: 'ticket_id and description_text (or latest_reply) required' });
 
   console.log(`[webhook] ticket#${ticketId} "${subject}"${latest ? ' (reply)' : ''}`);
 
   try {
     let { convs, aiAfterLastCustomer } = await getConversations(ticketId);
-    // 답장 호출: 최신 고객 메시지는 latest_reply 로 받으므로, 대화 이력 끝의 같은 고객 메시지는 제거해 중복을 막는다
-    if (latest && convs.length && convs[convs.length - 1].role === 'customer') convs = convs.slice(0, -1);
-    const latestText = latest || firstMsg;
+    let latestText = latest || firstMsg;
+    if (latest && convs.length && convs[convs.length - 1].role === 'customer') {
+      // 답장 호출: 최신 고객 메시지는 latest_reply 로 받으므로, 대화 이력 끝의 같은 고객 메시지는 제거해 중복을 막는다
+      convs = convs.slice(0, -1);
+    } else if (!latestText) {
+      // placeholder 가 비어서 온 경우: 대화 이력의 마지막 고객 메시지, 그것도 없으면 티켓 본문을 쓴다
+      const lastCustomer = [...convs].reverse().find(c => c.role === 'customer');
+      if (lastCustomer) { latestText = lastCustomer.body; convs = convs.slice(0, convs.lastIndexOf(lastCustomer)); }
+      else {
+        const tr = await fdFetch(`/tickets/${ticketId}`);
+        if (tr.ok) { const tj = await tr.json(); latestText = stripHtml(tj.description_text || tj.description || ''); }
+      }
+      if (!latestText) {
+        console.warn(`[webhook] ticket#${ticketId} 본문 없음 → 스킵`);
+        return res.status(200).json({ success: false, ticketId, reason: 'no customer text' });
+      }
+    }
 
     // Freshdesk 自動化が同じ更新で複数回呼ぶことがある → 最新の顧客メッセージに対する初案が既にあればスキップ
     if (aiAfterLastCustomer) {
