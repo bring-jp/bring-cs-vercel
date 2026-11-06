@@ -432,7 +432,6 @@ async function runClaude(userMsg, systemPrompt) {
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 2048,
-      temperature: 0.3,
       system: systemPrompt + DATA_NOTE,
       tools: [RESULT_TOOL],
       // 일부 모델은 tool_choice "tool"/"any" 강제를 지원하지 않는다 → auto + 지시문으로 호출을 유도하고, 미호출 시 본문 JSON 으로 복구
