@@ -435,8 +435,9 @@ async function runClaude(userMsg, systemPrompt) {
       temperature: 0.3,
       system: systemPrompt + DATA_NOTE,
       tools: [RESULT_TOOL],
-      tool_choice: { type: 'tool', name: 'cs_result' },
-      messages: [{ role: 'user', content: userMsg }],
+      // 일부 모델은 tool_choice "tool"/"any" 강제를 지원하지 않는다 → auto + 지시문으로 호출을 유도하고, 미호출 시 본문 JSON 으로 복구
+      tool_choice: { type: 'auto' },
+      messages: [{ role: 'user', content: userMsg + '\n\n必ず cs_result ツールを1回呼び出して結果を返してください。本文には何も書かないでください。' }],
     }),
   });
   let r = await call();
@@ -444,8 +445,12 @@ async function runClaude(userMsg, systemPrompt) {
   if (!r.ok) throw new Error(`claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
   const d = await r.json();
   const tu = (d.content || []).find(c => c.type === 'tool_use');
-  if (!tu || !tu.input || typeof tu.input.draft !== 'string') throw new Error('claude: no cs_result');
-  return tu.input;
+  if (tu && tu.input && typeof tu.input.draft === 'string') return tu.input;
+  // 복구: 본문에 JSON 으로 답한 경우
+  const text = (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) { try { const j = JSON.parse(m[0]); if (typeof j.draft === 'string') return j; } catch (_) {} }
+  throw new Error('claude: no cs_result (' + text.slice(0, 120) + ')');
 }
 
 async function runOpenAI(userMsg, systemPrompt) {
