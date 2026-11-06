@@ -101,18 +101,30 @@ Pro充電：非接触式に近い構造。電極位置がずれると「充電�
 - 1日推奨カロリー：プロフィール（年齢・身長・体重）から自動算出。任意設定は現在未対応。
 - +メッセージ：SMS系サービスのためアカウント登録不可。通常メールアドレスを使用。`;
 
-function buildPrompt(knowledge) {
-  return CS_RULES_HEAD + '\n\n' + (knowledge || CS_KNOWLEDGE_BUILTIN).trim() + '\n' + CS_RULES_TAIL;
+function buildPrompt(knowledge, examples) {
+  let p = CS_RULES_HEAD + '\n\n' + (knowledge || CS_KNOWLEDGE_BUILTIN).trim() + '\n' + CS_RULES_TAIL;
+  if (examples && examples.trim()) {
+    p += '\n\n【返信例（文体・構成の見本）】\n以下は過去の実際の返信例です。文体・見出しの立て方・切り分けの順番の見本として使うこと。' +
+      '事実・ポリシー・住所は上の知識ベースを正とし、例と食い違う場合は知識ベースに従うこと。例文をそのままコピーせず、お客様の状況に合わせて書くこと。\n\n' +
+      examples.trim();
+  }
+  return p;
 }
 
 
-// ── 知識ベース（Google ドキュメント）を Service Account で読む ──
-// 必要な環境変数: GOOGLE_SERVICE_ACCOUNT_JSON（既存）, CS_KNOWLEDGE_DOC_ID
+// ── 知識ベース・返信例集（Google ドキュメント）を Service Account で読む ──
+// 必要な環境変数: GOOGLE_SERVICE_ACCOUNT_JSON（既存）。CS_KNOWLEDGE_DOC_ID / CS_EXAMPLES_DOC_ID は未設定なら既定のドキュメントを使う
 // ドキュメントは Service Account のメールアドレスに「閲覧者」で共有しておくこと（/api/health に表示）
 const crypto = require('crypto');
-const KNOWLEDGE_DOC_ID = process.env.CS_KNOWLEDGE_DOC_ID;
+const DEFAULT_KNOWLEDGE_DOC_ID = '1fyRvO34iXT3_fML1-jbgV8YA2gKVqQNL0pOPGpaArHA'; // b.ring_CS_知識ベース（AI回答案用） v2 2026-11-06
+const DEFAULT_EXAMPLES_DOC_ID  = '1KZZrvNP8EZ7NPGo_WugksGXRlgY7Wxg__naWLRxmPyM'; // b.ring_CS_返信例集（AI回答案用）
+const LEGACY_KNOWLEDGE_DOC_IDS = ['1fPhzzGm8ZkVpCKYgHcjbyaJ5lQvkm00WUPf9Iv1OPqQ']; // v1（2026-11-05、使用停止）。env に残っていても v2 を使う
+const KNOWLEDGE_DOC_ID = (process.env.CS_KNOWLEDGE_DOC_ID && !LEGACY_KNOWLEDGE_DOC_IDS.includes(process.env.CS_KNOWLEDGE_DOC_ID))
+  ? process.env.CS_KNOWLEDGE_DOC_ID : DEFAULT_KNOWLEDGE_DOC_ID;
+const EXAMPLES_DOC_ID  = process.env.CS_EXAMPLES_DOC_ID || DEFAULT_EXAMPLES_DOC_ID;
 const KNOWLEDGE_TTL_MS = 10 * 60 * 1000;
 let knowledgeCache = { text: '', at: 0, source: 'builtin', error: '' };
+let examplesCache  = { text: '', at: 0, source: 'none', error: '' };
 
 function loadServiceAccount() {
   try { return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || ''); } catch { return null; }
@@ -137,28 +149,28 @@ async function googleAccessToken(sa, scope) {
   return (await r.json()).access_token;
 }
 
-async function fetchKnowledgeDoc() {
+async function fetchDriveDoc(docId, label, marker) {
   const sa = loadServiceAccount();
-  if (!sa || !KNOWLEDGE_DOC_ID) throw new Error('knowledge: not configured');
+  if (!sa || !docId) throw new Error(`${label}: not configured`);
   const token = await googleAccessToken(sa, 'https://www.googleapis.com/auth/drive.readonly');
   const h = { Authorization: `Bearer ${token}` };
   // Google ドキュメント → export、プレーンテキスト等 → alt=media
-  let r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}/export?mimeType=text/plain`, { headers: h });
-  if (!r.ok) r = await fetch(`https://www.googleapis.com/drive/v3/files/${KNOWLEDGE_DOC_ID}?alt=media`, { headers: h });
+  let r = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`, { headers: h });
+  if (!r.ok) r = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}?alt=media`, { headers: h });
   if (!r.ok) {
     let detail = '';
     try { const j = await r.json(); detail = (j.error && j.error.message) || ''; } catch (_) {}
-    throw new Error(`knowledge: drive ${r.status} ${detail}`.trim().slice(0, 300));
+    throw new Error(`${label}: drive ${r.status} ${detail}`.trim().slice(0, 300));
   }
   const text = (await r.text()).replace(/^﻿/, '').trim();
-  if (text.length < 200 || !text.includes('【')) throw new Error('knowledge: doc looks empty or malformed');
+  if (text.length < 200 || !text.includes(marker)) throw new Error(`${label}: doc looks empty or malformed`);
   return text;
 }
 
 async function getKnowledge() {
   if (knowledgeCache.text && Date.now() - knowledgeCache.at < KNOWLEDGE_TTL_MS) return knowledgeCache;
   try {
-    const text = await fetchKnowledgeDoc();
+    const text = await fetchDriveDoc(KNOWLEDGE_DOC_ID, 'knowledge', '【');
     knowledgeCache = { text, at: Date.now(), source: 'drive', error: '' };
   } catch (e) {
     console.warn('[knowledge]', e.message);
@@ -166,6 +178,19 @@ async function getKnowledge() {
     knowledgeCache = { text: knowledgeCache.text || '', at: Date.now(), source: knowledgeCache.text ? 'drive-stale' : 'builtin', error: e.message };
   }
   return knowledgeCache;
+}
+
+// 返信例集。取得できなければ例なしで動く（知識ベースだけで回答案を作る）
+async function getExamples() {
+  if (examplesCache.at && Date.now() - examplesCache.at < KNOWLEDGE_TTL_MS) return examplesCache;
+  try {
+    const text = await fetchDriveDoc(EXAMPLES_DOC_ID, 'examples', '◆');
+    examplesCache = { text, at: Date.now(), source: 'drive', error: '' };
+  } catch (e) {
+    console.warn('[examples]', e.message);
+    examplesCache = { text: examplesCache.text || '', at: Date.now(), source: examplesCache.text ? 'drive-stale' : 'none', error: e.message };
+  }
+  return examplesCache;
 }
 
 const AI_MARK = 'ai-draft-v2'; // 내부 메모 식별용 (중복 실행 방지). Freshdesk는 HTML 주석을 지우므로 본문에 보이는 텍스트로 넣는다
@@ -432,7 +457,8 @@ async function runClaude(userMsg, systemPrompt) {
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 2048,
-      system: systemPrompt + DATA_NOTE,
+      // プロンプトキャッシュ: 知識ベース＋返信例（長い・10分間は不変）をキャッシュ対象にしてコストを抑える
+      system: [{ type: 'text', text: systemPrompt + DATA_NOTE, cache_control: { type: 'ephemeral' } }],
       tools: [RESULT_TOOL],
       // 일부 모델은 tool_choice "tool"/"any" 강제를 지원하지 않는다 → auto + 지시문으로 호출을 유도하고, 미호출 시 본문 JSON 으로 복구
       tool_choice: { type: 'auto' },
@@ -524,8 +550,8 @@ const handler = async (req, res) => {
       ? `以下はお客様とのメールのやり取り履歴です。流れを踏まえた上で、最新のお客様メッセージに返信してください。\n\n━━━ 過去のやり取り ━━━\n${convs.map(c=>`${c.role==='support'?'【CS返信】':'【お客様】'} (${c.date})\n${c.body}`).join('\n\n')}\n\n━━━ 最新のお客様メッセージ ━━━\n差出人：${requester_name}\n件名：${subject}\n\n${latestText}`
       : `以下のCS問い合わせに返信メールを作成してください。\n\n差出人：${requester_name}\n件名：${subject}\n\n本文：\n${latestText}`;
 
-    const kb = await getKnowledge();
-    const systemPrompt = buildPrompt(kb.text);
+    const [kb, ex] = await Promise.all([getKnowledge(), getExamples()]);
+    const systemPrompt = buildPrompt(kb.text, ex.text);
 
     let engine = 'claude';
     let fallbackReason = '';
@@ -581,5 +607,7 @@ const handler = async (req, res) => {
 
 module.exports = handler;
 module.exports.getKnowledge = getKnowledge;
+module.exports.getExamples = getExamples;
+module.exports.docIds = () => ({ knowledge: KNOWLEDGE_DOC_ID, examples: EXAMPLES_DOC_ID });
 module.exports.serviceAccountEmail = () => (loadServiceAccount() || {}).client_email || null;
 module.exports.CS_KNOWLEDGE_BUILTIN = CS_KNOWLEDGE_BUILTIN;

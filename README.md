@@ -21,8 +21,11 @@ Claude 호출이 실패하면(키 문제, 장애) `OPENAI_API_KEY`가 있을 때
 
 AI가 참조하는 제품 사양·앱 경로·CS 정책은 코드가 아니라 Google Doc **「b.ring_CS_知識ベース（AI回答案用）」** 에 있다.
 
-- 함수는 `GOOGLE_SERVICE_ACCOUNT_JSON`의 서비스 계정으로 `CS_KNOWLEDGE_DOC_ID` 문서를 읽는다(문서를 그 서비스 계정 이메일에 뷰어로 공유해 둘 것. 이메일은 `/api/health`의 `knowledge.service_account_email`).
+- 함수는 `GOOGLE_SERVICE_ACCOUNT_JSON`의 서비스 계정으로 문서를 읽는다(문서를 그 서비스 계정 이메일에 뷰어로 공유해 둘 것. 이메일은 `/api/health`의 `knowledge.service_account_email`). 문서 ID는 코드에 기본값이 있고(`DEFAULT_KNOWLEDGE_DOC_ID`), 환경변수 `CS_KNOWLEDGE_DOC_ID`로 바꿀 수 있다. v1 문서 ID(2026-11-05)는 코드에서 무시하고 v2를 쓴다.
 - 10분 캐시. 문서를 고치면 재배포 없이 최대 10분 내 반영.
+- **반신 예시집** Google Doc **「b.ring_CS_返信例集（AI回答案用）」**(`DEFAULT_EXAMPLES_DOC_ID` / `CS_EXAMPLES_DOC_ID`)도 같은 방식으로 읽어 프롬프트 끝에 붙인다. 문체·구성의 견본용이며 사실은 지식 베이스가 우선. 못 읽으면 예시 없이 동작. `/api/health`의 `examples`로 확인.
+- 2026-11-06: 2026년 6월까지의 실제 회신 3,824건(SFT 데이터)에서 사양·정책을 추출해 v2 문서를 만들었다. `※要確認` 표시 행은 담당자 확인 대기.
+- Claude 호출은 system 블록에 prompt caching(`cache_control: ephemeral`)을 걸어 둔다. 지식 베이스+예시가 길어도 5분 내 연속 호출이면 입력 비용이 크게 줄어든다.
 - 읽기 실패 시 직전에 읽은 내용 → 그것도 없으면 코드 내장본(`CS_KNOWLEDGE_BUILTIN`) 순으로 쓴다. 내장본은 비상용이므로 가끔 문서와 맞춰 둔다.
 - `/api/health`의 `knowledge.source`가 `drive`면 정상, `builtin`이면 문서를 못 읽고 있는 것.
 - 매주 금요일 Claude 스케줄 작업(22번)이 지난주 AI 초안과 담당자 실제 회신을 비교해 문서 수정안을 Slack으로 보낸다. 반영은 사람이 문서를 편집해서 한다.
@@ -39,7 +42,8 @@ AI가 참조하는 제품 사양·앱 경로·CS 정책은 코드가 아니라 G
 | SLACK_CS_WEBHOOK_URL | 권장 | #브링cs Incoming Webhook 주소 |
 | SLACK_MENTION | 선택 | 긴급 알림 멘션. 기본 `<@U047X89UBJ7>` |
 | OPENAI_API_KEY | 선택 | Claude 호출 실패 시 백업 |
-| CS_KNOWLEDGE_DOC_ID | 권장 | 지식 베이스 Google Doc ID. 없으면 코드 내장본 사용 |
+| CS_KNOWLEDGE_DOC_ID | 선택 | 지식 베이스 Google Doc ID. 없으면 코드 기본값(v2 문서) 사용 |
+| CS_EXAMPLES_DOC_ID | 선택 | 반신 예시집 Google Doc ID. 없으면 코드 기본값 사용 |
 | GOOGLE_SERVICE_ACCOUNT_JSON | 권장 | 서비스 계정 JSON 전체. 지식 베이스 읽기용 |
 
 설정 후 Redeploy. `/api/health`에서 `ai_engine`이 `claude`로 보이면 정상.

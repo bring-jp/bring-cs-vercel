@@ -6,6 +6,12 @@ module.exports = async (req, res) => {
     const kb = await webhook.getKnowledge();
     knowledge = { source: kb.source, chars: (kb.text || webhook.CS_KNOWLEDGE_BUILTIN || '').length, fetched_at: kb.at ? new Date(kb.at).toISOString() : null, error: kb.error || '' };
   } catch (e) { knowledge.error = e.message; }
+  let examples = { source: 'unknown', chars: 0, error: '' };
+  try {
+    const ex = await webhook.getExamples();
+    examples = { source: ex.source, chars: (ex.text || '').length, count: ((ex.text || '').match(/◆ 分類/g) || []).length, fetched_at: ex.at ? new Date(ex.at).toISOString() : null, error: ex.error || '' };
+  } catch (e) { examples.error = e.message; }
+  const ids = webhook.docIds();
 
   res.setHeader('Access-Control-Allow-Origin', '*');   // 대시보드(아티팩트)에서 상태 조회용. 비밀값 없음
   res.setHeader('Cache-Control', 'no-store');
@@ -24,9 +30,10 @@ module.exports = async (req, res) => {
       slack_cs:        !!process.env.SLACK_CS_WEBHOOK_URL,
     },
     knowledge: {
-      doc_id:                process.env.CS_KNOWLEDGE_DOC_ID || 'not set',
+      doc_id:                ids.knowledge,
       service_account_email: webhook.serviceAccountEmail() || 'not set',
       ...knowledge,
     },
+    examples: { doc_id: ids.examples, ...examples },
   });
 };
