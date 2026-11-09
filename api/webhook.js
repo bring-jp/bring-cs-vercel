@@ -238,6 +238,29 @@ function parseBody(b) {
   return o;
 }
 
+// Vercel 의 req.body 는 접근 시 JSON.parse 를 하고, 깨진 JSON 이면 우리 코드 밖에서 400(본문 없음)을 돌려준다.
+// Freshdesk 는 고객 답장의 따옴표·줄바꿈을 이스케이프하지 않으므로, req.body 를 건드리지 않고 원본 스트림을 직접 읽는다.
+// (Vercel 헬퍼는 읽은 본문을 req 의 data/end 이벤트로 다시 흘려 준다)
+function readRawBody(req, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    try {
+      req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))));
+      req.on('end', () => { clearTimeout(timer); finish(Buffer.concat(chunks).toString('utf8')); });
+      req.on('error', () => { clearTimeout(timer); finish(null); });
+    } catch (_) { clearTimeout(timer); finish(null); }
+  });
+}
+
+async function getRequestBody(req) {
+  const raw = await readRawBody(req);
+  if (raw !== null && raw !== '') return raw;
+  try { return req.body; } catch (e) { console.warn('[webhook] req.body 파싱 실패:', e.message); return ''; }
+}
+
 function stripHtml(s) {
   return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
 }
@@ -499,11 +522,12 @@ const handler = async (req, res) => {
 
   // Freshdesk 자동화의 "複雑" JSON은 placeholder 안의 줄바꿈·따옴표를 이스케이프하지 않아 깨진 JSON이 올 수 있다.
   // 그 경우 req.body 는 문자열이다 → 최대한 복구하고, 안 되면 ticket_id 만이라도 뽑아낸다.
-  const body = parseBody(req.body);
+  const rawBody = await getRequestBody(req);
+  const body = parseBody(rawBody);
   const { ticket_id, id, subject='', requester_name='', description_text='', latest_reply='' } = body;
   const ticketId = String(ticket_id || id || '').replace(/\D/g, '');
   if (!ticketId) {
-    console.warn('[webhook] ticket_id 없음. body=', String(typeof req.body === 'string' ? req.body : JSON.stringify(req.body)).slice(0, 300));
+    console.warn('[webhook] ticket_id 없음. body=', String(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody)).slice(0, 300));
     // 400 을 계속 돌려주면 Freshdesk 가 규칙을 자동 비활성화하므로 200 으로 받고 로그만 남긴다
     return res.status(200).json({ success: false, reason: 'ticket_id missing' });
   }
