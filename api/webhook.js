@@ -498,7 +498,9 @@ async function runClaude(userMsg, systemPrompt) {
   const text = (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
   const m = text.match(/\{[\s\S]*\}/);
   if (m) { try { const j = JSON.parse(m[0]); if (typeof j.draft === 'string') return j; } catch (_) {} }
-  throw new Error('claude: no cs_result (' + text.slice(0, 120) + ')');
+  const types = (d.content || []).map(c => c.type).join(',');
+  const tuKeys = tu && tu.input ? Object.keys(tu.input).join(',') : '';
+  throw new Error(`claude: no cs_result stop=${d.stop_reason} blocks=[${types}] tool_keys=[${tuKeys}] out_tokens=${d.usage && d.usage.output_tokens} (${text.slice(0, 120)})`);
 }
 
 async function runOpenAI(userMsg, systemPrompt) {
