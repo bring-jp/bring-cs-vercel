@@ -24,7 +24,19 @@ const CS_RULES_HEAD = `あなたはb.ring日本向けカスタマーサポート
 署名：「b.ringカスタマーサポート」
 本文トピック区切り：「───────────────」を使用
 文体：丁寧だが過度に重くない。不要な謝罪の繰り返し・重複内容・件名生成は禁止。
-過去のやり取りがある場合は重複した確認や質問をしないこと。`;
+過去のやり取りがある場合は重複した確認や質問をしないこと。
+
+【回答の質（最重要）】
+お客様が「ちゃんと読んで、自分の状況に合わせて答えてくれた」と感じる返信を書くこと。定型文の貼り付けに見える短い返信は不可。
+1. まず状況を正確に把握する：最新メッセージだけでなく過去のやり取り全体を読み、何が起きていて、何を困っていて、前回CSが何を案内し、お客様が何を試したか（結果も）を整理する。
+   お問い合わせフォームの「デバイスOS・アプリのバージョン・ファームウェアのバージョン・最終同期日時」は必ず確認し、原因の推定に使う（例：FW v.null＝未接続、最終同期が古い＝同期できていない、OS・アプリが古い＝更新案内）。
+2. 冒頭でお客様の状況を具体的に言い換えて受け止める（「〜とのこと」）。何に困っているかを取り違えないこと。前回の案内を試していただいた場合はその結果にきちんと触れる。
+3. 考えられる原因を、お客様に分かる言葉で1〜3点説明する（断定はしない。「〜の可能性がございます」）。知識ベースにない仕様は推測で書かない。
+4. 対処手順は番号付きで、アプリ内のパス（マイページ > …）まで具体的に書く。各手順の目的を短く添える。既に試した手順は繰り返さず、次の段階の手順を案内する。
+5. 「上記で改善しない場合は〜」という次の分岐（交換・診断データ送信・追加情報の依頼など）を必ず示し、お客様が次に何をすればよいか迷わないようにする。
+6. お客様からの質問がいくつかある場合は、すべてに漏れなく答える。数値や結果を返信してくださった場合は、その結果が何を意味するかを説明する。
+7. 長さの目安：不具合・トラブル系は本文 600〜1,200字程度、簡単な質問・お礼への返信は 300〜500字程度。中身のない水増し（同じお詫びの繰り返し・一般論）はしない。
+8. お客様が困っている・怒っている場合は、お詫びを1回、具体的に（何についてのお詫びか）述べる。`;
 
 const CS_RULES_TAIL = `
 【禁止事項】
@@ -284,7 +296,7 @@ async function getConversations(id) {
       convs.push({
         role: c.incoming ? 'customer' : 'support',
         date: new Date(c.created_at).toLocaleString('ja-JP'),
-        body: stripHtml(c.body_text || c.body).slice(0, 600),
+        body: stripHtml(c.body_text || c.body).slice(0, 1800),
       });
     }
     // 마지막 고객 메시지 이후에 이미 AI 초안이 있으면 중복 실행
@@ -301,6 +313,8 @@ async function addNote(id, body, meta = {}) {
   const needs = (meta.needs_info || []).filter(Boolean);
   const metaHtml = `
   <p style="margin:0 0 4px;font-size:12px;color:#1E3A8A;">요약: ${esc(meta.summary || '-')}</p>
+  ${meta.analysis ? `<p style="margin:0 0 4px;font-size:12px;color:#1E3A8A;">분석: ${esc(meta.analysis).replace(/\n/g, '<br>')}</p>` : ''}
+  ${meta.engine && meta.engine !== 'claude' ? `<p style="margin:0 0 4px;font-size:12px;color:#B91C1C;">⚠ 예비 엔진(OpenAI)으로 작성됨 — 내용이 얕을 수 있으니 특히 주의해서 확인</p>` : ''}
   <p style="margin:0 0 4px;font-size:12px;color:#1E3A8A;">분류: ${esc(meta.category || '-')} · 우선순위: ${esc(meta.priority || '-')} · 증상: ${esc(meta.symptom || '-')} · 고객 언어: ${esc(meta.language || 'ja')}</p>
   ${needs.length ? `<p style="margin:0 0 4px;font-size:12px;color:#B45309;">교환 처리에 아직 없는 정보: ${esc(needs.join(', '))} → 초안에서 고객에게 요청함</p>` : ''}
   ${meta.flag ? `<p style="margin:0 0 4px;font-size:12px;color:#B91C1C;">주의: ${esc(meta.flag)}</p>` : ''}`;
@@ -450,13 +464,14 @@ const RESULT_TOOL = {
         description: '4=発火・発煙・火花・やけど・怪我・皮膚トラブルなど安全に関わる、または消費者センター・法的措置の言及 / 3=全く使えない・再不良・返品返金 / 2=充電・接続・測定の不具合 / 1=その他質問' },
       symptom:  { type: 'string', enum: [...SYMPTOMS, '해당없음'], description: '主な症状。該当なしは「해당없음」' },
       language: { type: 'string', enum: ['ja', 'en', 'ko', 'zh', 'other'], description: 'お客様が書いている言語' },
-      summary:  { type: 'string', description: '担当者向けの問い合わせ要約。韓国語で1〜2文。顧客名は書かない' },
+      summary:  { type: 'string', description: '担当者向けの問い合わせ要約。韓国語で2〜3文。これまでの経緯（前回の案内・お客様が試したこと）と今回の要点。顧客名は書かない' },
+      analysis: { type: 'string', description: '担当者向けの分析（韓国語）。「원인 추정: … / 확인할 것: …(서버 로그·주문·재고 등 담당자가 확인할 항목) / 권장 대응: …」の形で3〜5行。' },
       needs_info: { type: 'array', items: { type: 'string', enum: ['注文番号', 'お名前', 'ご住所', 'お電話番号', 'モデル/サイズ/カラー'] },
         description: '交換・再発送が必要な案件で、お客様からまだ得られていない必須情報。不要な案件は空配列' },
       flag: { type: 'string', description: '担当者が特に注意すべき点（安全・法的言及・感情的な強い不満・過去のやり取りとの矛盾など）。なければ空文字' },
       draft:    { type: 'string', description: 'お客様への返信メール本文（固定形式に従う）。category が 영업·스팸 の場合は空文字' },
     },
-    required: ['category', 'priority', 'symptom', 'language', 'summary', 'needs_info', 'flag', 'draft'],
+    required: ['category', 'priority', 'symptom', 'language', 'summary', 'analysis', 'needs_info', 'flag', 'draft'],
   },
 };
 
@@ -479,7 +494,7 @@ async function runClaude(userMsg, systemPrompt) {
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 2048,
+      max_tokens: 12000, // 모델이 먼저 내부 사고(thinking)를 하므로 여유 있게. 2048 에서는 초안 전에 잘려 OpenAI 로 폴백되던 문제
       // プロンプトキャッシュ: 知識ベース＋返信例（長い・10分間は不変）をキャッシュ対象にしてコストを抑える
       system: [{ type: 'text', text: systemPrompt + DATA_NOTE, cache_control: { type: 'ephemeral' } }],
       tools: [RESULT_TOOL],
@@ -507,7 +522,7 @@ async function runOpenAI(userMsg, systemPrompt) {
   const OpenAI = require('openai');
   const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   const comp = await openai.chat.completions.create({
-    model: 'gpt-4o-mini', max_tokens: 1024, temperature: 0.3,
+    model: 'gpt-4o-mini', max_tokens: 2500, temperature: 0.3,
     messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMsg }],
   });
   return { draft: comp.choices[0]?.message?.content || '' };
@@ -622,7 +637,7 @@ const handler = async (req, res) => {
     await updateFields(ticketId, { custom_fields: fields, priority: prio, type: ttype });
     await addNote(ticketId, draft, {
       summary: ai.summary, category: type, priority: prio, symptom: fields.cf_rand931886,
-      language: ai.language, needs_info: ai.needs_info, flag: ai.flag,
+      language: ai.language, needs_info: ai.needs_info, flag: ai.flag, analysis: ai.analysis, engine,
     });
 
     if (prio === 4) {
