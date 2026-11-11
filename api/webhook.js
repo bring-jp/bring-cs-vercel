@@ -525,6 +525,8 @@ const handler = async (req, res) => {
   const rawBody = await getRequestBody(req);
   const body = parseBody(rawBody);
   const { ticket_id, id, subject='', requester_name='', description_text='', latest_reply='' } = body;
+  // dry_run: Freshdesk 에 아무것도 쓰지 않고 AI 결과만 돌려준다(시크릿 필수). 프롬프트 점검·장애 재현용
+  const dryRun = body.dry_run === true;
   const ticketId = String(ticket_id || id || '').replace(/\D/g, '');
   if (!ticketId) {
     console.warn('[webhook] ticket_id 없음. body=', String(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody)).slice(0, 300));
@@ -559,7 +561,7 @@ const handler = async (req, res) => {
     }
 
     // Freshdesk 自動化が同じ更新で複数回呼ぶことがある → 最新の顧客メッセージに対する初案が既にあればスキップ
-    if (aiAfterLastCustomer) {
+    if (aiAfterLastCustomer && !dryRun) {
       console.log(`[webhook] ticket#${ticketId} skip: draft already exists`);
       return res.status(200).json({ success: true, ticketId, skipped: 'draft_exists' });
     }
@@ -603,6 +605,10 @@ const handler = async (req, res) => {
     const ttype = ticketType(type);
     console.log(`[webhook] ticket#${ticketId} done engine=${engine} kb=${kb.source} type=${type} prio=${prio} lang=${ai.language || '-'}`);
 
+    if (dryRun) {
+      return res.status(200).json({ success: true, dry_run: true, ticketId, engine, fallbackReason: fallbackReason || undefined,
+        type, prio, latestText: latestText.slice(0, 500), history: convs.length, ai });
+    }
     await addTag(ticketId, type);
 
     // 営業・スパム: タグと最低優先度だけ付けて終了（下書き・Slackなし）
