@@ -185,7 +185,7 @@ async function fetchDriveDoc(docId, label, marker) {
     try { const j = await r.json(); detail = (j.error && j.error.message) || ''; } catch (_) {}
     throw new Error(`${label}: drive ${r.status} ${detail}`.trim().slice(0, 300));
   }
-  const text = (await r.text()).replace(/^﻿/, '').trim();
+  const text = (await r.text()).replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   if (text.length < 200 || !text.includes(marker)) throw new Error(`${label}: doc looks empty or malformed`);
   return text;
 }

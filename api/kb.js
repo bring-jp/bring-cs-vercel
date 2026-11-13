@@ -20,7 +20,7 @@ async function readDoc(id) {
   const t = await driveToken('https://www.googleapis.com/auth/drive.readonly');
   const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}/export?mimeType=text/plain`, { headers: { Authorization: `Bearer ${t}` } });
   if (!r.ok) throw new Error(`drive read ${r.status}`);
-  return (await r.text()).replace(/^﻿/, '').replace(/\r\n/g, '\n').trim();
+  return (await r.text()).replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 function readBody(req) {
   return new Promise((resolve) => {
@@ -54,7 +54,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, posted: 'slack' });
     }
 
-    const doc = body.doc; const content = String(body.content || '').replace(/\r\n/g, '\n').trim();
+    const doc = body.doc; const content = String(body.content || '').replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     if (!ids[doc]) return res.status(400).json({ error: 'doc must be knowledge|examples' });
     const missing = REQUIRED[doc].filter(m => !content.includes(m));
     if (missing.length) return res.status(422).json({ error: 'required sections missing', missing });
